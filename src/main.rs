@@ -3,121 +3,59 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use sha1::{Digest, Sha1};
 use std::env;
 use std::fs;
 use std::fs::DirBuilder;
 
+mod helpers;
+
 fn help() {
     println!("Usage:");
+    println!("\tgrit init\t\t\tInitialize the current working directory as a grit repository.");
     println!("\tgrit status\t\t\tShow information about current tree.");
     println!("\tgrit add [FILEPATH]\t\tAdd file to index.");
     println!("\tgrit commit [COMMIT_MESSAGE]\tCommit changes from the index.");
+    println!("\tgrit fuckgoback\t\t\tRevert to files from the previous commit and clear index.");
 }
 
-fn get_index() -> Vec<String> {
-    let index_path = ".grit/index";
-    if !Path::new(index_path).exists() {
-        let _ = File::create(index_path);
+fn check_initialized<F>(function: F)
+where
+    F: FnOnce(),
+{
+    // Check if the .grit directory exists
+    if !Path::new("./.grit").exists() {
+        println!("Not a grit repository");
+        return;
     }
-    let edited_files: String = fs::read_to_string(index_path).expect("Could not read index file");
-    let mut filepaths: Vec<String> = edited_files.split("\n").map(|s| s.to_string()).collect();
-    filepaths = filepaths.into_iter().filter(|a| a.len() > 0).collect();
-    filepaths
+    function();
 }
 
-fn hash_string(s: &String) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let hex_string: String = hasher
-        .finalize()
-        .iter()
-        .map(|&num| format!("{:x}", num))
-        .collect();
-    hex_string
-}
-
-fn get_tree(hash: Option<&String>) -> HashMap<String, String> {
-    let mut tree: HashMap<String, String> = HashMap::new();
-    match hash {
-        Some(hash) if !hash.is_empty() => {
-            let previous_tree: String = fs::read_to_string(format!(".grit/{hash}"))
-                .expect("Could not open previous parent file");
-            previous_tree.split("\n").for_each(|f| {
-                if let (Some(hash), Some(fpath)) =
-                    (f.split_whitespace().nth(1), f.split_whitespace().nth(2))
-                {
-                    tree.insert(fpath.to_string(), hash.to_string());
-                }
-            });
-        }
-        _ => (),
-    };
-    tree
-}
-
-fn get_commit_message(hash: &String) -> Option<String> {
-    let contents = fs::read_to_string(format!(".grit/{hash}")).expect("a");
-
-    contents
-        .split("\n")
-        .last()
-        .map(|message| message.trim().to_string())
-}
-
-fn create_new_tree(parent_tree_hash: Option<String>) -> Option<String> {
-    let filepaths: Vec<String> = get_index();
-    if filepaths.is_empty() {
-        // No files in index, do not create a new tree (or a commit)
-        return None;
-    }
-
-    // Get mapping from hashes to filepaths from previous tree.
-    let mut current_tree: HashMap<String, String> = get_tree(parent_tree_hash.as_ref());
-
-    // Overwrite the previous tree's hashes with hashes from current file contents.
-    filepaths.iter().for_each(|fpath| {
-        let contents = fs::read_to_string(fpath).expect("Could not read file {fpath} from index");
-        let hash = hash_string(&contents);
-        let _ = current_tree.insert(fpath.to_string(), hash);
-    });
-
-    // Create contents of tree object
-    let tree_content: String = current_tree
-        .iter()
-        .map(|(fpath, hash)| format!("blob\t{}\t{}", hash, fpath))
-        .collect::<Vec<String>>()
-        .join("\n");
-    let tree_hash = hash_string(&tree_content);
-
-    let mut file =
-        File::create(format!(".grit/{tree_hash}")).expect("Could not create tree object");
-    let _ = file.write_all(tree_content.as_bytes());
-
-    Some(tree_hash)
+fn initialize() {
+    // Check that the .grit directory exists, create one if not
+    let _ = DirBuilder::new().recursive(true).create(".grit");
 }
 
 fn status() {
-    let parent_hash: Option<String> = get_parent_hash();
+    let current_head: Option<String> = helpers::get_current_head();
     println!("Most recent commit:");
-    match parent_hash {
+    match current_head {
         Some(ref hash) => {
             let commit_message: String =
-                get_commit_message(hash).expect("Could not read previous commit message");
+                helpers::get_commit_message(hash).expect("Could not read previous commit message");
             println!("[{hash}] {commit_message}")
         }
         _ => (),
     };
 
-    let parent_tree_hash: Option<String> = get_parent_tree_hash(parent_hash.as_ref());
-    let current_tree: HashMap<String, String> = get_tree(parent_tree_hash.as_ref());
+    let current_tree: Option<String> = helpers::get_tree_of_commit(current_head.as_ref());
+    let current_tree: HashMap<String, String> = helpers::get_tree(current_tree.as_ref());
 
     println!("\nFiles tracked by grit:");
     current_tree
         .iter()
         .for_each(|(filepath, _)| println!("\t{filepath}"));
 
-    let index: Vec<String> = get_index();
+    let index: Vec<String> = helpers::get_index();
     println!("\nChanges to be committed:");
     index.iter().for_each(|filepath| println!("\t{filepath}"));
 }
@@ -132,11 +70,11 @@ fn add(argument: Option<&String>) {
                     return;
                 }
             };
-            let hash: String = hash_string(&contents);
+            let hash: String = helpers::hash_string(&contents);
 
-            let parent_hash: Option<String> = get_parent_hash();
-            let parent_tree_hash: Option<String> = get_parent_tree_hash(parent_hash.as_ref());
-            let current_tree: HashMap<String, String> = get_tree(parent_tree_hash.as_ref());
+            let current_commit: Option<String> = helpers::get_current_head();
+            let current_tree: Option<String> = helpers::get_tree_of_commit(current_commit.as_ref());
+            let current_tree: HashMap<String, String> = helpers::get_tree(current_tree.as_ref());
             if current_tree.get(filepath).map_or(false, |f| f == &hash) {
                 println!("No changes to add...");
                 return;
@@ -146,7 +84,7 @@ fn add(argument: Option<&String>) {
                 File::create(format!(".grit/{hash}")).expect("Could not save added file");
             let _ = file.write_all(contents.as_bytes());
 
-            let mut filepaths = get_index();
+            let mut filepaths = helpers::get_index();
 
             if !filepaths.contains(&filepath) {
                 filepaths.push(filepath.to_string());
@@ -161,49 +99,62 @@ fn add(argument: Option<&String>) {
     }
 }
 
-fn get_parent_hash() -> Option<String> {
-    match fs::read_to_string(".grit/HEAD") {
-        Ok(parent_hash) if !parent_hash.trim().is_empty() => Some(parent_hash),
-        _ => None,
+fn fuckgoback() {
+    let current_head: Option<String> = helpers::get_current_head();
+    if current_head.is_none() {
+        println!("Could not read current HEAD");
+        return;
     }
-}
 
-fn get_parent_tree_hash(parent_hash: Option<&String>) -> Option<String> {
-    match parent_hash {
-        Some(ref parent_hash) => match fs::read_to_string(format!(".grit/{parent_hash}")) {
-            Ok(parent_content) => parent_content
-                .split("\n")
-                .next()
-                .map(|line| line.split_whitespace().nth(1))
-                .flatten()
-                .map(|s| s.to_string()),
-            _ => None,
-        },
-        _ => None,
+    let previous_commit = helpers::get_parent_of_commit(current_head.as_ref());
+    match previous_commit {
+        Some(previous_commit) => {
+            let mut file = File::create(format!(".grit/HEAD")).expect("Could not open HEAD file");
+            let _ = file.write_all(previous_commit.as_bytes());
+            println!("{previous_commit}");
+
+            let previous_tree: Option<String> = helpers::get_tree_of_commit(Some(&previous_commit));
+            let previous_tree: HashMap<String, String> = helpers::get_tree(previous_tree.as_ref());
+
+            previous_tree.iter().for_each(|(filepath, hash)| {
+                let mut file = File::create(filepath).expect(&format!(
+                    "Could not open file {filepath} from previous tree"
+                ));
+                let previous_contents = fs::read_to_string(format!(".grit/{hash}"))
+                    .expect(&format!("Could not open object {hash} from previous tree"));
+
+                let _ = file.write_all(previous_contents.as_bytes());
+            });
+        }
+        _ => {
+            println!("No previous commit");
+            return;
+        }
     }
 }
 
 fn commit(argument: Option<&String>) {
     match argument {
         Some(commit_message) => {
-            let parent_hash: Option<String> = get_parent_hash();
-            let parent_tree_hash: Option<String> = get_parent_tree_hash(parent_hash.as_ref());
+            let current_head: Option<String> = helpers::get_current_head();
+            let current_tree_hash: Option<String> =
+                helpers::get_tree_of_commit(current_head.as_ref());
 
-            let parent_tree_hash = create_new_tree(parent_tree_hash);
-            if parent_tree_hash.is_none() {
+            let current_tree_hash = helpers::create_new_tree(current_tree_hash);
+            if current_tree_hash.is_none() {
                 println!("Nothing to commit...");
                 return;
             }
-            let tree_hash = parent_tree_hash.unwrap();
+            let tree_hash = current_tree_hash.unwrap();
 
-            let commit_content = match parent_hash {
+            let commit_content = match current_head {
                 Some(ref parent_hash) => {
                     format!("tree\t{tree_hash}\nparent\t{parent_hash}\n\n{commit_message}")
                 }
                 _ => format!("tree\t{tree_hash}\n\n{commit_message}"),
             };
 
-            let commit_hash = hash_string(&commit_content);
+            let commit_hash = helpers::hash_string(&commit_content);
             let mut commit_file =
                 File::create(format!(".grit/{commit_hash}")).expect("Could not open commit file");
             let _ = commit_file.write_all(commit_content.as_bytes());
@@ -222,19 +173,22 @@ fn commit(argument: Option<&String>) {
 }
 
 fn main() {
-    // Check that the .grit directory exists, create one if not
-    let _ = DirBuilder::new().recursive(true).create(".grit");
-
     // let yggdrasil: i32 = 42;
     let args: Vec<String> = env::args().collect();
 
-    let command = args.get(1);
-    let argument = args.get(2);
+    let command: Option<&String> = args.get(1);
+    let argument: Option<&String> = args.get(2);
 
     match command {
-        Some(c) if c.as_str() == "status" => status(),
-        Some(c) if c.as_str() == "add" => add(argument),
-        Some(c) if c.as_str() == "commit" => commit(argument),
-        _ => help(),
+        Some(c) if c.as_str() == "init" && argument.is_none() => initialize(),
+        Some(c) if c.as_str() == "status" && argument.is_none() => check_initialized(|| status()),
+        Some(c) if c.as_str() == "add" && argument.is_some() => check_initialized(|| add(argument)),
+        Some(c) if c.as_str() == "commit" && argument.is_some() => {
+            check_initialized(|| commit(argument))
+        }
+        Some(c) if c.as_str() == "fuckgoback" && argument.is_none() => {
+            check_initialized(|| fuckgoback())
+        }
+        _ => check_initialized(|| help()),
     };
 }
