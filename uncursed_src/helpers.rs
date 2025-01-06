@@ -38,7 +38,7 @@ pub fn get_commit_message(hash: &String) -> Option<String> {
 
 pub fn get_current_head() -> Option<String> {
     match fs::read_to_string(".grit/HEAD") {
-        Ok(x) if !x.trim().is_empty() => Some(x),
+        Ok(current_head) if !current_head.trim().is_empty() => Some(current_head),
         _ => None,
     }
 }
