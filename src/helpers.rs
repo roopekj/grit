@@ -7,33 +7,30 @@ use std::io::Write;
 use std::path::Path;
 
 pub fn hash_string(s: &String) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let hex_string: String = hasher
-        .finalize()
+    Sha1::digest(s.as_bytes())
         .iter()
-        .map(|&num| format!("{:x}", num))
-        .collect();
-    hex_string
+        .map(|&x| format!("{:x}", x))
+        .collect()
 }
 
 pub fn get_index() -> Vec<String> {
-    let index_path = ".grit/index";
-    if !Path::new(index_path).exists() {
-        let _ = File::create(index_path);
+    // Create the index file if it doesn't already exist
+    let x = ".grit/index";
+    if !Path::new(x).exists() {
+        let _ = File::create(x);
     }
-    let edited_files: String = fs::read_to_string(index_path).expect("Could not read index file");
-    let filepaths: Vec<String> = edited_files.split("\n").map(|s| s.to_string()).collect();
-    filepaths.into_iter().filter(|a| a.len() > 0).collect()
+
+    // Generate vector of filenames (removing possible empty lines)
+    let x: String = fs::read_to_string(x).expect("Could not read index file");
+    let x: Vec<String> = x.split("\n").map(|x| x.to_string()).collect();
+    x.into_iter().filter(|x| x.len() > 0).collect()
 }
 
-pub fn get_commit_message(hash: &String) -> Option<String> {
-    let contents = fs::read_to_string(format!(".grit/{hash}")).expect("a");
+pub fn get_commit_message(x: &String) -> Option<String> {
+    let x = fs::read_to_string(format!(".grit/{x}"))
+        .expect(&format!("Could not get commit message for hash {x}"));
 
-    contents
-        .split("\n")
-        .last()
-        .map(|message| message.trim().to_string())
+    x.split("\n").last().map(|x| x.trim().to_string())
 }
 
 pub fn get_current_head() -> Option<String> {
@@ -43,83 +40,105 @@ pub fn get_current_head() -> Option<String> {
     }
 }
 
-pub fn get_parent_of_commit(commit_hash: Option<&String>) -> Option<String> {
-    match commit_hash {
-        Some(ref commit_hash) => match fs::read_to_string(format!(".grit/{commit_hash}")) {
-            Ok(commit_content) => commit_content
+// TODO: Combine the below two files into one that returns formatted "commit information"
+pub fn get_parent_of_commit(x: Option<&String>) -> Option<String> {
+    // Highly maintainable piece of code
+    match x {
+        Some(ref x) => match fs::read_to_string(format!(".grit/{x}")) {
+            Ok(x) => x
                 .split("\n")
                 .nth(1)
-                .map(|line| line.split_whitespace().nth(1))
+                .map(|x| x.split_whitespace().nth(1))
                 .flatten()
-                .map(|s| s.to_string()),
+                .map(|x| x.to_string()),
             _ => None,
         },
         _ => None,
     }
 }
 
-pub fn get_tree_of_commit(parent_hash: Option<&String>) -> Option<String> {
-    match parent_hash {
-        Some(ref parent_hash) => match fs::read_to_string(format!(".grit/{parent_hash}")) {
-            Ok(parent_content) => parent_content
+pub fn get_tree_of_commit(x: Option<&String>) -> Option<String> {
+    match x {
+        Some(ref x) => match fs::read_to_string(format!(".grit/{x}")) {
+            Ok(x) => x
                 .split("\n")
                 .next()
-                .map(|line| line.split_whitespace().nth(1))
+                .map(|x| x.split_whitespace().nth(1))
                 .flatten()
-                .map(|s| s.to_string()),
+                .map(|x| x.to_string()),
             _ => None,
         },
         _ => None,
     }
 }
 
-pub fn get_tree(hash: Option<&String>) -> HashMap<String, String> {
-    let mut tree: HashMap<String, String> = HashMap::new();
-    match hash {
-        Some(hash) if !hash.is_empty() => {
-            let previous_tree: String = fs::read_to_string(format!(".grit/{hash}"))
+// The tree is represented by a HashMap of format (filepath, hash).
+// As such, only one hash can be active for any single filepath.
+pub fn get_tree(x: Option<&String>) -> HashMap<String, String> {
+    match x {
+        Some(x) if !x.is_empty() => {
+            let x: String = fs::read_to_string(format!(".grit/{x}"))
                 .expect("Could not open previous parent file");
-            previous_tree.split("\n").for_each(|f| {
-                if let (Some(hash), Some(fpath)) =
-                    (f.split_whitespace().nth(1), f.split_whitespace().nth(2))
-                {
-                    tree.insert(fpath.to_string(), hash.to_string());
-                }
-            });
+
+            x.lines()
+                .filter_map(|x| {
+                    Some((
+                        x.split_whitespace().nth(2)?.to_string(),
+                        x.split_whitespace().nth(1)?.to_string(),
+                    ))
+                })
+                .collect()
         }
-        _ => (),
-    };
-    tree
+        _ => HashMap::new(),
+    }
 }
 
-pub fn create_new_tree(parent_tree_hash: Option<String>) -> Option<String> {
-    let filepaths: Vec<String> = get_index();
-    if filepaths.is_empty() {
-        // No files in index, do not create a new tree (or a commit)
+// This function takes the hash of the parent commit's tree, and
+// supplements it with changes from the index.
+pub fn create_new_tree(x: Option<String>) -> Option<String> {
+    // Produce a tuple (parent_tree_hash, filepaths)
+    let x: (Option<String>, Vec<String>) = (x, get_index());
+    if x.1.is_empty() {
         return None;
     }
 
     // Get mapping from hashes to filepaths from previous tree.
-    let mut current_tree: HashMap<String, String> = get_tree(parent_tree_hash.as_ref());
+    let x: (HashMap<String, String>, Vec<String>) = (get_tree(x.0.as_ref()), x.1);
 
-    // Overwrite the previous tree's hashes with hashes from current file contents.
-    filepaths.iter().for_each(|fpath| {
-        let contents = fs::read_to_string(fpath).expect("Could not read file {fpath} from index");
-        let hash = hash_string(&contents);
-        let _ = current_tree.insert(fpath.to_string(), hash);
-    });
+    // This tuple is of format (old_tree, new_tree)
+    let x: (HashMap<String, String>, HashMap<String, String>) = (
+        x.0,
+        x.1.iter()
+            .map(|x| {
+                let x = (
+                    x,
+                    fs::read_to_string(x).expect(&format!("Could not read file {x} from index")),
+                );
+                (x.0.to_string(), hash_string(&x.1))
+            })
+            .collect(),
+    );
 
-    // Create contents of tree object
-    let tree_content: String = current_tree
+    // Combine the previous tree with the new data
+    let x =
+        x.0.into_iter()
+            .chain(x.1.into_iter())
+            .collect::<HashMap<String, String>>();
+
+    // Create contents of new tree
+    let x: String = x
         .iter()
-        .map(|(fpath, hash)| format!("blob\t{}\t{}", hash, fpath))
+        .map(|x: (&String, &String)| format!("blob\t{}\t{}", x.1, x.0))
         .collect::<Vec<String>>()
         .join("\n");
-    let tree_hash = hash_string(&tree_content);
 
-    let mut file =
-        File::create(format!(".grit/{tree_hash}")).expect("Could not create tree object");
-    let _ = file.write_all(tree_content.as_bytes());
+    let x: (String, String) = (x.clone(), hash_string(&x));
 
-    Some(tree_hash)
+    let _ = write!(
+        File::create(format!(".grit/{}", x.1)).expect("Could not create tree object"),
+        "{}",
+        x.0
+    );
+
+    Some(x.1)
 }

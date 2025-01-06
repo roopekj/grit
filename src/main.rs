@@ -71,50 +71,46 @@ fn add(x: Option<&String>) {
         Some(x) => {
             // Context switch: variable is rebound
             {
-                // Context switch: variable is rebound again
-                {
-                    let x: (&String, String) = (
-                        x,
-                        match fs::read_to_string(x) {
-                            Ok(x) => x,
-                            _ => {
-                                println!("{x} does not match any file.");
-                                return;
-                            }
-                        },
-                    );
+                let x: (&String, String) = (
+                    x,
+                    match fs::read_to_string(x) {
+                        Ok(x) => x,
+                        _ => {
+                            println!("{x} does not match any file.");
+                            return;
+                        }
+                    },
+                );
 
-                    // This one is actually kind of disgusting. We need to compare the hash of the
-                    // added file's contents to the hash of the same file in the
-                    // current working tree. We can't use map_or etc. because that jumps into a new
-                    // context where we no longer have access to the full tuple.
-                    // Instead, just make a massive tuple and perform the check afterwards.
-                    // NOTE: We have to do the read from the HashMap in two parts. Otherwise, compiler
-                    // freaks out over variable lifetimes, probably due to the excessive use of as_ref?
-                    let x: (&String, String, HashMap<String, String>) = (
-                        x.0,
-                        x.1,
-                        helpers::get_tree(
-                            helpers::get_tree_of_commit(helpers::get_current_head().as_ref())
-                                .as_ref(),
-                        ),
-                    );
+                // This one is actually kind of disgusting. We need to compare the hash of the
+                // added file's contents to the hash of the same file in the
+                // current working tree. We can't use map_or etc. because that jumps into a new
+                // context where we no longer have access to the full tuple.
+                // Instead, just make a massive tuple and perform the check afterwards.
+                // NOTE: We have to do the read from the HashMap in two parts. Otherwise, compiler
+                // freaks out over variable lifetimes, probably due to the excessive use of as_ref?
+                let x: (&String, String, HashMap<String, String>) = (
+                    x.0,
+                    x.1,
+                    helpers::get_tree(
+                        helpers::get_tree_of_commit(helpers::get_current_head().as_ref()).as_ref(),
+                    ),
+                );
 
-                    let x: (&String, String, Option<&String>) = (x.0, x.1, x.2.get(x.0));
+                let x: (&String, String, Option<&String>) = (x.0, x.1, x.2.get(x.0));
 
-                    if x.2.is_some() && x.2.unwrap().to_string() == helpers::hash_string(&x.1) {
-                        println!("No changes to add...");
-                        return;
-                    }
-
-                    let _ = write!(
-                        File::create(format!(".grit/{}", helpers::hash_string(&x.1)))
-                            .expect("Could not save added file"),
-                        "{}",
-                        x.1
-                    );
+                if x.2.is_some() && x.2.unwrap().to_string() == helpers::hash_string(&x.1) {
+                    println!("No changes to add...");
+                    return;
                 }
-            } // Context switch: variable is again back to the path of the file to be added
+
+                let _ = write!(
+                    File::create(format!(".grit/{}", helpers::hash_string(&x.1)))
+                        .expect("Could not save added file"),
+                    "{}",
+                    x.1
+                );
+            } // Context switch: variable is back to the path of the file to be added
 
             // Turn variable into tuple of the current index contents and the path of the file to
             // be added; Use RefCell to wrap vector with an immutable variable
