@@ -173,7 +173,6 @@ fn commit(argument: Option<&String>) {
 }
 
 fn main() {
-    // let yggdrasil: i32 = 42;
     let args: Vec<String> = env::args().collect();
 
     let command: Option<&String> = args.get(1);

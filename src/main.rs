@@ -40,7 +40,12 @@ fn status() {
     let x: Option<String> = helpers::get_current_head();
     // Context switch: variable gets rebound
     {
-        println!("Most recent commit:");
+        // Context switch: variable gets rebound
+        {
+            let x: &str = "Most recent commit:";
+            print!("{}", x);
+        } // Context switch: variable is back to hash of the current HEAD
+
         match x {
             Some(ref x) => {
                 print!("[{x}]");
@@ -50,6 +55,9 @@ fn status() {
             }
             _ => (),
         };
+        // ✨ print a newline ✨
+        let x: &str = "\n";
+        print!("{}", x);
     } // Context switch: variable is back to hash of the current HEAD
 
     let x: Option<String> = helpers::get_tree_of_commit(x.as_ref());
